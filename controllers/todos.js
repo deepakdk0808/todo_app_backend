@@ -1,7 +1,7 @@
 const Todo = require("../models/todos");
 const router = require("express").Router();
 const mqtt = require("mqtt");
-const redisClient = require("./redisClient"); // Import from the new module
+const redisClient = require("./redisClient");
 const { broadcastMessage } = require("./webSocket");
 
 // Redis key for storing tasks
@@ -21,7 +21,6 @@ client.on("message", async (topic, message) => {
   if (topic === "/add") {
     try {
       const messageData = JSON.parse(message.toString());
-      // await addTaskToCache(messageData);
     } catch (err) {
       console.error("Error adding todo from MQTT message", err);
     }
@@ -42,6 +41,7 @@ const addTaskToCache = async (task) => {
       await Todo.insertMany(cachedTasks);
       // Clear the cache
       await redisClient.del(REDIS_TASK_KEY);
+      // console.log("Limit reached, clearing cache and saving to MongoDB");
     } else {
       // Store updated tasks in cache
       await redisClient.set(REDIS_TASK_KEY, JSON.stringify(cachedTasks));
@@ -61,7 +61,7 @@ router.post("/add", async (req, res) => {
   };
   try {
     await addTaskToCache(newTodo);
-    client.publish("/add", JSON.stringify({ title: req.body.title })); // Notify MQTT subscribers
+    client.publish("/add", JSON.stringify({ title: req.body.title })); 
     res.status(200).json({ message: "Todo added successfully" });
   } catch (err) {
     res.status(500).json(err);
@@ -71,10 +71,20 @@ router.post("/add", async (req, res) => {
 // GET ALL
 router.get("/fetchAllTasks", async (req, res) => {
   try {
-    const todos = await Todo.find();
-    res.status(200).json(todos);
+    // Fetch tasks from Redis
+    let cachedTasksString = await redisClient.get(REDIS_TASK_KEY);
+    let cachedTasks = cachedTasksString ? JSON.parse(cachedTasksString) : [];
+
+    if (cachedTasks.length > 0) {
+      // Return tasks from Redis
+      res.status(200).json({ source: "Redis", tasks: cachedTasks });
+    } else {
+      // If no tasks in Redis, fetch from MongoDB
+      const todos = await Todo.find();
+      res.status(200).json({ source: "MongoDB", tasks: todos });
+    }
   } catch (err) {
-    res.status(500).json(err);
+    res.status(500).json({ message: "Error fetching tasks", error: err });
   }
 });
 
